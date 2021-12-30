@@ -1,0 +1,194 @@
+#!/bin/bash
+#apt update
+#apt install openvpn
+apt install ufw
+
+########################################incert your personal data###################################################################
+####################################################################################################################################
+
+workingdir=~ #set the directory, where all files will append (default is ~)
+#template CAparams=("YOUR_COUNTRY" "EASYRSA_REQ_PROVINCE" "EASYRSA_REQ_CITY" "EASYRSA_REQ_ORG" "EASYRSA_REQ_EMAIL" "EASYRSA_REQ_OU")
+CAparams=("US" "NewYork" "GarlemCity" "DigitalOcean" "admin@example.com" "Community")
+
+#check your operating system, and uncomment parametrs, whitch are marced like this paragraf
+
+####################################################################################################################################
+####################################################################################################################################
+
+wget -P $workingdir/ https://github.com/OpenVPN/easy-rsa/releases/download/v3.0.4/EasyRSA-3.0.4.tgz #download EasyRSA
+sleep 3
+
+cd $workingdir
+tar xvf EasyRSA-3.0.4.tgz   
+
+cd $workingdir/EasyRSA-3.0.4/
+cp vars.example vars                #create vars file fo configure CA
+defaultCA=("US" "California" "San[[:space:]]Francisco" "Copyleft[[:space:]]Certificate[[:space:]]Co" "me@example.net" "My[[:space:]]Organizational[[:space:]]Unit")
+nameofCAparams=("EASYRSA_REQ_COUNTRY" "EASYRSA_REQ_PROVINCE" "EASYRSA_REQ_CITY" "EASYRSA_REQ_ORG" "EASYRSA_REQ_EMAIL" "EASYRSA_REQ_OU")
+for (( i=0 ; i < 6 ; i++));         #incerting your personal data of CA from CAparams
+do
+sed -i 's/"'${defaultCA[$i]}'"/"'${CAparams[$i]}'"/g' vars
+line_num=`awk '/'${nameofCAparams[$i]}'/{print NR}' vars`
+sed -i ''$line_num' s/#//g' vars    #Uncommenting CA parametrs in lines with CA parametrs
+done
+
+####building CA
+./easyrsa init-pki                  #initiating public key infrastructure on the CA server
+./easyrsa build-ca nopass           #to avoid enetring password every time interacting with CA
+
+####creating and signing Server key-,req- files
+echo "Configuring Serverfiles"
+echo "Enter OpenVPNserver name, or press enter to continue(default is 'server'):"
+read servername
+if [[ $servername == "" ]]; then
+servername="server"
+fi
+./easyrsa gen-req $servername nopass    #generating server private key(server.key) and requesting certificate file (server.req)
+./easyrsa sign-req server $servername   #signing request
+./easyrsa gen-dh                        #generating DH-key
+echo "Generating HMAC"
+
+########################################################################################################################################
+########################################################################################################################################
+#openvpn --genkey --secret ta.key        #creating HMAC for debian9,10
+openvpn --genkey secret ta.key           #creating HMAC for debian11
+########################################################################################################################################
+########################################################################################################################################
+
+cp $workingdir/EasyRSA-3.0.4/{ta.key,./pki/{./private/$servername.key,./issued/server.crt,ca.crt,dh.pem}} /etc/openvpn/server/
+
+#####if you wont to create one client
+####creating and signing User key-,req- files
+#mkdir -p $workingdir/client-configs
+#clientconfigsdir=$workingdir/client-configs
+#mkdir -p $clientconfigsdir/keys
+#chmod -R 700 $clientconfigsdir
+#echo "Configure client certificates and key pairs"
+#echo "Enter OpenVPNclient name, or press enter to continue(default is 'client'):"
+#read client
+#if [[ $client == "" ]]; then
+#client="client"
+#fi
+#./easyrsa gen-req $client nopass    #generating client private key(client.key) and requesting certificate file (client.req)
+#./easyrsa sign-req client $client   #signing request
+#cp $workingdir/EasyRSA-3.0.4/{ta.key,./pki/{./private/$client.key,./issued/$client.crt,ca.crt}} $clientconfigsdir/keys/
+
+####configuring OpenVPN service
+
+####################################################################################################################################
+#####################################################################################################################################
+#cp /usr/share/doc/openvpn/examples/sample-config-files/server.conf.gz /etc/openvpn/    #for debian9,10
+#gzip -d /etc/openvpn/server.conf.gz                                                    #for debian9,10
+cp /usr/share/doc/openvpn/examples/sample-config-files/server.conf /etc/openvpn/        #for debian11
+#####################################################################################################################################
+#####################################################################################################################################
+
+
+##!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!##
+######################################################################server configure#################################################################
+
+echo "#######################Starting changing server.conf file###################################################"
+#uncomenting some lines in /etc/openvpn/server.conf
+#;push "redirect-gateway def1 bypass-dhcp"
+#;push "dhcp-option DNS 208.67.222.222"
+#;push "dhcp-option DNS 208.67.220.220"
+serverconffile=/etc/openvpn/server.conf
+lines_to_uncomment=("tls-auth ta.key 0" "cipher AES-256-CBC" "user nobody" "group nogroup" "redirect-gateway def1 bypass-dhcp" "dhcp-option DNS 208.67.222.222" "dhcp-option DNS 208.67.220.220")    
+for ix in ${!lines_to_uncomment[*]}
+do
+sed -i '/'"${lines_to_uncomment[$ix]}"'/ s/;//g' $serverconffile
+done
+
+sed -i '/cipher AES-256-CBC/a \
+auth SHA256' $serverconffile #adding HMAC
+
+echo "Set openVPNport, or press Enter to continue(default 1194)"
+read openvpnserverport
+if [[ $openvpnserverport == "" ]]; then
+openvpnserverport="1194"
+fi
+sed -i '/port 1194/ s/1194/'$openvpnserverport'/g' $serverconffile
+
+echo "Set openVPNport protocol,or press Enter to continue(default udp)"
+read openvpnprotocol
+if [[ $openvpnprotocol == "" ]]; then
+openvpnprotocol="udp"
+fi
+#cahnging location of server keyfiles
+params_of_server_config_tochange=("ca[[:space:]]ca.crt" "dh[[:space:]]dh2048.pem" "cert[[:space:]]server.crt" "key[[:space:]]server.key" "tls-auth[[:space:]]ta.key[[:space:]]0")
+new_params_of_server_config_tochange=("ca_\/etc\/openvpn\/server\/ca.crt" "dh_\/etc\/openvpn\/server\/dh.pem" "cert_\/etc\/openvpn\/server\/$servername.crt" "key_\/etc\/openvpn\/server\/$servername.key" "tls-auth_\/etc\/openvpn\/server\/ta.key_0")
+for (( i=0 ; i < 5 ; i++));
+do
+sed -i 's/'${params_of_server_config_tochange[$i]}'/'${new_params_of_server_config_tochange[$i]}'/g;s/_/ /g' $serverconffile
+done
+if [[ $openvpnprotocol == "udp" ]]; then
+sed -i '/proto udp/ s/;//g' $serverconffile
+sed -i '/proto tcp/ s/proto tcp/;proto tcp/g' $serverconffile
+else
+sed -i '/proto tcp/ s/;//g' $serverconffile
+sed -i '/proto udp/ s/proto udp/;proto udp/g' $serverconffile
+sed -i '/explicit-exit-notify 1/ s/1/0/g' $serverconffile
+fi
+
+####configure server network
+echo "######################################################################################################################"
+echo "starting network configuration"
+sed -i '/net.ipv4.ip_forward=1/s/#//g' /etc/sysctl.conf #uncomment net.ipv4.ip_forward=1
+echo "Permiting traffic forwarding"
+sysctl -p
+eth_device_name=`ip route | grep default | awk '{print $5}'` #netcard name with default gateway
+echo "Adding rules to UFW configuration"
+sed -i '/#   ufw-before-forward/a \
+\
+\
+# START OPENVPN RULES\
+# NAT table rules\
+*nat\
+:POSTROUTING ACCEPT [0:0]\
+# Allow traffic from OpenVPN client to '$eth_device_name' (change to the interface you discovered!)\
+-A POSTROUTING -s 10.8.0.0/8 -o '$eth_device_name' -j MASQUERADE\
+COMMIT\
+# END OPENVPN RULES' /etc/ufw/before.rules #adding rule to UFW
+echo "Changing DEFAULT_FORWARD_POLICY from DROP to ACCEPT in /etc/default/ufw"
+sed -i '/DEFAULT_FORWARD_POLICY/s/DROP/ACCEPT/g' /etc/default/ufw
+echo "#####################################Starting ufw configuration#######################################################"
+echo "Enter number of your ssh connection port(default 22)"
+read sshport
+if [[ $sshport == "" ]]; then
+sshport="22"
+fi
+ufw allow $openvpnserverport/$openvpnprotocol
+ufw allow $sshport
+ufw disable
+ufw enable
+
+####starting Openvpn service
+systemctl start openvpn@$servername
+echo "#################################Status of OpenVPN service#########################################"
+#systemctl status openvpn@$servername
+echo "################################Status of OpenVPN tunel############################################"
+ip addr show $tun
+echo "Adding OpenVPN server to startup"
+systemctl enable openvpn@$servername
+
+##!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!##
+####################################################clietn conf files dir and base.conf################################################################
+mkdir -p /etc/openvpn/client-configs
+chmod -R 700 /etc/openvpn/client-configs
+cp /usr/share/doc/openvpn/examples/sample-config-files/client.conf /etc/openvpn/client-configs/base.conf
+clietconffile=/etc/openvpn/client-configs/base.conf
+openvpnserverip=`ip a | grep enp0s3 | grep inet | awk '{print $2}' | awk -F/ '{print $1}'`
+sed -i '/remote my-server-1 1194/ s/my-server-1/'$openvpnserverip'/g;s/1194/'$openvpnserverport'/' $clietconffile
+sed -i '/proto udp/ s/udp/'$openvpnprotocol'/g' $clietconffile
+#uncomment somelines
+sed -i '/user nobody/s/;//g' $clietconffile 
+sed -i '/group nogroup/s/;//g' $clietconffile 
+#comment some lines
+sed -i 's/ca ca.crt/#ca ca.crt/g' $clietconffile 
+sed -i 's/cert client.crt/#cert client.crt/g' $clietconffile 
+sed -i 's/key client.key/#key client.key/g' $clietconffile 
+sed -i 's/tls-auth ta.key 1/#tls-auth ta.key 1/g' $clietconffile 
+
+sed -i '/cipher AES-256-CBC/a \
+auth SHA256\
+key-direction 1' $clietconffile  #adding HMAC and key-direction for correct server work

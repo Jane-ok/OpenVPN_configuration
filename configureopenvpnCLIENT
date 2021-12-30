@@ -1,0 +1,47 @@
+#!/bin/bash
+
+################################################################################################
+################################################################################################
+easyrsadir=~/EasyRSA-3.0.4 #dir, where easyrsa is locate
+
+################################################################################################
+################################################################################################
+
+cd $easyrsadir
+echo "Configure client certificates and key pairs"
+echo "Enter OpenVPNclient name, or press enter to continue(default is 'client'):"
+read client
+if [[ $client == "" ]]; then
+client="client"
+fi
+
+clientconfigsdir=/etc/openvpn/client-configs
+
+mkdir -p $clientconfigsdir/$client
+clients=$clientconfigsdir/$client
+
+mkdir -p $clientconfigsdir/$client/keys
+clietnkeydir=$clientconfigsdir/$client/keys
+
+./easyrsa gen-req $client nopass    #generating client private key(client.key) and requesting certificate file (client.req)
+./easyrsa sign-req client $client   #signing request
+cp $easyrsadir/{ta.key,./pki/{./private/$client.key,./issued/$client.crt,ca.crt}} $clietnkeydir/
+
+
+KEY_DIR=$clietnkeydir
+OUTPUT_DIR=$clients
+BASE_CONFIG=$clientconfigsdir/base.conf
+
+cat ${BASE_CONFIG} \
+    <(echo -e '<ca>') \
+    ${KEY_DIR}/ca.crt \
+    <(echo -e '</ca>\n<cert>') \
+    ${KEY_DIR}/${client}.crt \
+    <(echo -e '</cert>\n<key>') \
+    ${KEY_DIR}/${client}.key \
+    <(echo -e '</key>\n<tls-auth>') \
+    ${KEY_DIR}/ta.key \
+    <(echo -e '</tls-auth>') \
+    > ${OUTPUT_DIR}/${client}.ovpn
+
+
